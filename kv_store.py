@@ -45,7 +45,7 @@ def main():
                 set_in_memory(key, value)
             elif parts[0] == "GET" and len(parts) == 2:
                 value = get_from_memory(parts[1])
-                print(value if value else "key not found")
+                print(value if value else "")
             else:
                 print("invalid command")
         except EOFError:
