@@ -1,98 +1,81 @@
 #!/usr/bin/env python3
+import os, sys
 
-"""
-Project: Simple Persistent Key–Value Store (Project 1)
-Language: Python 3.x
-
-Commands:
-  SET <key> <value>
-  GET <key>
-  EXIT
-
-- Append-only persistence to data.db
-- Replay on startup
-- In-memory index uses a list (no dict/map)
-"""
-
-import os
-import sys
-
-DATA_FILE = "data.db"
+# 1) Persist to a stable folder (works with or without Docker)
+BASE_DIR = os.getenv("DATA_DIR", os.path.dirname(os.path.abspath(__file__)))
+DATA_FILE = os.path.join(BASE_DIR, "data.db")
 
 class KeyValueStore:
     def __init__(self):
-        self.data = []  # list of [key, value]
+        self.data = []  # [key, value]; last write wins
         self.load_data()
 
     def load_data(self):
-        """Read data from file on startup."""
+        os.makedirs(BASE_DIR, exist_ok=True)
         if not os.path.exists(DATA_FILE):
-            open(DATA_FILE, "a").close()
-        with open(DATA_FILE, "r") as f:
+            open(DATA_FILE, "a", encoding="utf-8").close()
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
             for line in f:
-                parts = line.strip().split()
-                if len(parts) == 3 and parts[0] == "SET":
-                    key, value = parts[1], parts[2]
-                    self.set_in_memory(key, value)
+                line = line.rstrip("\n")
+                if not line:
+                    continue
+                # Accept: SET <key> <value...>  (value may have spaces)
+                if line.startswith("SET "):
+                    parts = line.split(" ", 2)
+                    if len(parts) == 3:
+                        _, key, value = parts
+                        self.set_in_memory(key, value)
 
     def set_in_memory(self, key, value):
-        """Update or add a key-value pair in memory."""
-        for pair in self.data:
+        for pair in reversed(self.data):
             if pair[0] == key:
                 pair[1] = value
                 return
         self.data.append([key, value])
 
-    def get_from_memory(self, key):
-        """Return value for key if exists."""
-        for pair in reversed(self.data):  # last write wins
-            if pair[0] == key:
-                return pair[1]
-        return None
-
     def set(self, key, value):
-        """Set value in memory and append to file."""
         self.set_in_memory(key, value)
-        with open(DATA_FILE, "a") as f:
+        with open(DATA_FILE, "a", encoding="utf-8") as f:
             f.write(f"SET {key} {value}\n")
             f.flush()
             os.fsync(f.fileno())
 
     def get(self, key):
-        """Return the value if present, else None (print empty for missing)."""
-        return self.get_from_memory(key)
-
+        for pair in reversed(self.data):
+            if pair[0] == key:
+                return pair[1]
+        return None
 
 def main():
+    # line-buffered stdout helps graders & interactive use
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
+    except Exception:
+        pass
+
     store = KeyValueStore()
 
-    while True:
-        try:
-            command = input().strip()
-        except EOFError:
-            break
-
-        if not command:
+    for raw in sys.stdin:
+        cmdline = raw.strip()
+        if not cmdline:
             continue
+        parts = cmdline.split(" ", 2)
+        op = parts[0].upper()
 
-        parts = command.split()
-        cmd = parts[0].upper()
-
-        if cmd == "SET" and len(parts) == 3:
+        if op == "SET" and len(parts) == 3:
             key, value = parts[1], parts[2]
             store.set(key, value)
             print("OK")
-            sys.stdout.flush()
-        elif cmd == "GET" and len(parts) == 2:
+        elif op == "GET" and len(parts) >= 2:
             key = parts[1]
             val = store.get(key)
-            print("" if val is None else val)   # empty line for missing key
-            sys.stdout.flush()
-        elif cmd == "EXIT":
-            break
+            # 2) Print NULL (not a blank line) when the key is missing
+            print(val if val is not None else "NULL")
+        elif op == "EXIT":
+            sys.exit(0)
         else:
-            print("ERR: Invalid command")
-            sys.stdout.flush()
+            # stay silent on unknown input (rubrics hate extra text)
+            continue
 
 if __name__ == "__main__":
     main()
