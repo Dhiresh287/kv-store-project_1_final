@@ -70,7 +70,7 @@ def main():
             key = parts[1]
             val = store.get(key)
             # 2) Print NULL (not a blank line) when the key is missing
-            print(val if val is not None else "NULL")
+            print(val if val is not None else "")
         elif op == "EXIT":
             sys.exit(0)
         else:
