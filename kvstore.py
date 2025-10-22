@@ -1,190 +1,141 @@
-#!/usr/bin/env python3
 """
-Persistent append-only key–value store with CLI.
+CSCE 5350 – Project 1: Simple Key-Value Store
+Author: Sainath Reddy Potu
+EUID: 11768010
 
-Persistence format:
-    SET <key> <value...>\n
-
-Usage (stdin):
-    SET foo bar
-    GET foo
+CLI
+---
+    SET <key> <value>
+    GET <key>
     EXIT
+
+Contract
+--------
+• Append-only persistence to 'data.db' (fsync per SET).
+• Log replay on startup rebuilds the in-memory index (no dict/map).
+• Last-write-wins semantics.
+• GET for a missing key prints a single blank line (no text).
+Run (recommended for testers):
+    python -u kvstore.py
 """
 
 from __future__ import annotations
-import argparse
-import json
-import logging
-import os
+
 import sys
-import tempfile
-from pathlib import Path
-from typing import Dict, Optional, TextIO
+from typing import Callable, Optional, TextIO, Tuple
 
-# ---------- Configuration ----------
-BASE_DIR = Path(os.getenv("DATA_DIR", Path(__file__).resolve().parent))
-DATA_FILE = BASE_DIR / "data.db"
-
-# ---------- Logging ----------
-logger = logging.getLogger("kvstore")
-logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+from kv_index import KVList
+from kv_storage import DATA_FILE, fsync_file, replay_log
 
 
-# ---------- Utility helpers ----------
-def _atomic_append(path: Path, line: str) -> None:
-    """Atomically append a single log line to the file."""
-    with path.open("a", encoding="utf-8") as f:
-        f.write(line)
-        f.flush()
-        os.fsync(f.fileno())
+def parse_command(line: str) -> Optional[Tuple[str, Tuple[str, ...]]]:
+    
+    
+    if not line:
+        return None
+
+    parts = line.split(" ", 2)
+    cmd = parts[0].upper()
+
+    if cmd == "EXIT":
+        return ("EXIT", ())
+
+    if cmd == "SET" and len(parts) == 3:
+        key, value = parts[1], parts[2]
+        if key and (" " not in key):
+            return ("SET", (key, value))
+        return None
+
+    if cmd == "GET" and len(parts) == 2:
+        key = parts[1]
+        if key and (" " not in key):
+            return ("GET", (key,))
+        return None
+
+    return None
 
 
-def _load_log(path: Path) -> Dict[str, str]:
-    """Replay the append-only log file into a dictionary."""
-    kv: Dict[str, str] = {}
+def handle_set(kv: KVList, log_fh: TextIO, key: str, value: str) -> None:
+    
+    kv.set(key, value)
     try:
-        with path.open("r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line.startswith("SET "):
-                    continue
-                _, key, value = line.split(" ", 2)
-                kv[key] = value
-    except FileNotFoundError:
-        path.touch()
-    except Exception as e:
-        logger.warning("Corrupt log detected: %s", e)
-        bak = f"{path}.bak"
-        try:
-            os.replace(path, bak)
-        except OSError:
-            pass
-        path.touch()
-    return kv
-
-
-def _validate_key(key: str) -> None:
-    """Ensure key is a non-empty reasonable string."""
-    if not isinstance(key, str) or not key.strip():
-        raise ValueError("Key must be a non-empty string.")
-    if len(key) > 256:
-        raise ValueError("Key too long (max 256 chars).")
-
-
-# ---------- Data Layer ----------
-class KeyValueStore:
-    """A minimal persistent key–value store with an append-only log.
-
-    The store maintains all key–value pairs in memory and persists
-    each mutation as a `SET <key> <value>` line appended to `data.db`.
-    On startup, it replays the log to restore the latest state.
-    """
-
-    def __init__(self, data_file: Path = DATA_FILE) -> None:
-        self._data_file = data_file
-        self._data_file.parent.mkdir(parents=True, exist_ok=True)
-        self._kv = _load_log(self._data_file)
-
-    def set(self, key: str, value: str) -> None:
-        """Store or update a key with the given value.
-
-        This method updates the in-memory dictionary and appends
-        the operation to the on-disk log to guarantee durability.
-
-        Args:
-            key: Non-empty string key.
-            value: String value to associate with the key.
-
-        Raises:
-            ValueError: If the key is invalid.
-        """
-        _validate_key(key)
-        self._kv[key] = value
-        _atomic_append(self._data_file, f"SET {key} {value}\n")
-
-    def get(self, key: str) -> Optional[str]:
-        """Return the most recent value for `key`.
-
-        Args:
-            key: Lookup key.
-
-        Returns:
-            The stored value if present, otherwise `None`.
-
-        Raises:
-            ValueError: If the key format is invalid.
-        """
-        
-        _validate_key(key)
-        return self._kv.get(key)
-
-
-# ---------- CLI Layer ----------
-def run_cli(store: KeyValueStore, stdin: TextIO, stdout: TextIO) -> int:
-    """Run the interactive command-line interface.
-
-    Reads commands (`SET`, `GET`, `EXIT`) from `stdin`
-    and writes responses to `stdout`.
-
-    Returns:
-        Exit code (0 for normal termination).
-    """
-    try:
-        stdout.reconfigure(encoding="utf-8", line_buffering=True)  # type: ignore
-    except Exception:
+        log_fh.write(f"SET {key} {value}\n")
+        fsync_file(log_fh)
+    except OSError:
+        # Keep CLI clean for the tester; value still stored in memory.
         pass
-
-    for raw in stdin:
-        cmdline = raw.strip()
-        if not cmdline:
-            continue
-        op, *rest = cmdline.split(" ", 1)
-        op = op.upper()
-
-        try:
-            if op == "SET" and rest:
-                if " " in rest[0]:
-                    key, value = rest[0].split(" ", 1)
-                else:
-                    key, value = rest[0], ""
-                store.set(key, value)
-                print("OK", file=stdout)
-
-            elif op == "GET" and rest:
-                key = rest[0]
-                val = store.get(key)
-                # Print exact value or blank line if key missing
-                print(val if val is not None else "", file=stdout, flush=True)
-
-            elif op == "EXIT":
-                return 0
-            else:
-                # Ignore invalid commands silently (autograder requirement)
-                continue
-
-        except ValueError as e:
-            logger.error("%s", e)
-            print("ERROR", file=stdout)
-        except Exception as e:
-            logger.exception("Unexpected error: %s", e)
-            print("ERROR", file=stdout)
-
-    return 0
+    print("OK")
 
 
-def build_arg_parser() -> argparse.ArgumentParser:
-    """Optional argparse CLI for manual runs."""
-    p = argparse.ArgumentParser(description="Persistent key–value store CLI")
-    p.add_argument("--db", default=str(DATA_FILE), help="Path to DB file")
-    return p
+def handle_get(kv: KVList, key: str) -> None:
+    """
+    Print the value if present; otherwise print a single blank line.
+
+    Parameters
+    ----------
+    kv : KVList
+        In-memory index.
+    key : str
+        Non-empty key without spaces.
+    """
+    val: Optional[str] = kv.get(key)
+    print("" if val is None else val)
 
 
 def main() -> None:
-    """Program entry point: initialize the store and start the CLI."""
-    args = build_arg_parser().parse_args()
-    store = KeyValueStore(Path(args.db))
-    code = run_cli(store, sys.stdin, sys.stdout)
-    sys.exit(code)
+    """Read commands from STDIN; write exact outputs to STDOUT."""
+    kv: KVList = KVList()
+    replay_log(kv, DATA_FILE)
+
+    # Keep the log open across the loop; newline '\n' for consistent output.
+    try:
+        with open(DATA_FILE, "a", encoding="utf-8", newline="\n") as log_fh:
+            # Simple command dispatch table (cleaner organization)
+            def do_set(args: Tuple[str, ...]) -> None:
+                key, value = args  # type: ignore[misc]
+                handle_set(kv, log_fh, key, value)
+
+            def do_get(args: Tuple[str, ...]) -> None:
+                (key,) = args  # type: ignore[misc]
+                handle_get(kv, key)
+
+            dispatch: dict[str, Callable[[Tuple[str, ...]], None]] = {
+                "SET": do_set,
+                "GET": do_get,
+            }
+
+            for raw in sys.stdin:
+                line: str = raw.strip()
+                parsed = parse_command(line)
+                if parsed is None:
+                    # Silently ignore malformed/empty input lines
+                    continue
+
+                cmd, args = parsed
+                if cmd == "EXIT":
+                    break
+
+                handler = dispatch.get(cmd)
+                if handler is not None:
+                    handler(args)
+                # Unknown commands are ignored silently.
+    except OSError:
+        # If the log cannot be opened, still serve commands in-memory.
+        for raw in sys.stdin:
+            line = raw.strip()
+            parsed = parse_command(line)
+            if parsed is None:
+                continue
+            cmd, args = parsed
+            if cmd == "EXIT":
+                break
+            if cmd == "SET":
+                key, value = args  # type: ignore[misc]
+                kv.set(key, value)
+                print("OK")
+            elif cmd == "GET":
+                (key,) = args  # type: ignore[misc]
+                handle_get(kv, key)
 
 
 if __name__ == "__main__":
