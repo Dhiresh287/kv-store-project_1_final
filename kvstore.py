@@ -119,7 +119,8 @@ def run_cli(store: KeyValueStore, stdin: TextIO, stdout: TextIO) -> int:
             elif op == "GET" and rest:
                 key = rest[0]
                 val = store.get(key)
-                print(val if val is not None else "", file=stdout)
+                # Print exact value or blank line if key missing
+                print(val if val is not None else "", file=stdout, flush=True)
 
             elif op == "EXIT":
                 return 0
