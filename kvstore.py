@@ -73,7 +73,12 @@ def _validate_key(key: str) -> None:
 
 # ---------- Data Layer ----------
 class KeyValueStore:
-    """In-memory last-write-wins key–value store backed by an append-only log."""
+    """A minimal persistent key–value store with an append-only log.
+
+    The store maintains all key–value pairs in memory and persists
+    each mutation as a `SET <key> <value>` line appended to `data.db`.
+    On startup, it replays the log to restore the latest state.
+    """
 
     def __init__(self, data_file: Path = DATA_FILE) -> None:
         self._data_file = data_file
@@ -81,20 +86,49 @@ class KeyValueStore:
         self._kv = _load_log(self._data_file)
 
     def set(self, key: str, value: str) -> None:
-        """Set key → value and append to persistent log."""
+        """Store or update a key with the given value.
+
+        This method updates the in-memory dictionary and appends
+        the operation to the on-disk log to guarantee durability.
+
+        Args:
+            key: Non-empty string key.
+            value: String value to associate with the key.
+
+        Raises:
+            ValueError: If the key is invalid.
+        """
         _validate_key(key)
         self._kv[key] = value
         _atomic_append(self._data_file, f"SET {key} {value}\n")
 
     def get(self, key: str) -> Optional[str]:
-        """Return the stored value for key, or None if not found."""
+        """Return the most recent value for `key`.
+
+        Args:
+            key: Lookup key.
+
+        Returns:
+            The stored value if present, otherwise `None`.
+
+        Raises:
+            ValueError: If the key format is invalid.
+        """
+        
         _validate_key(key)
         return self._kv.get(key)
 
 
 # ---------- CLI Layer ----------
 def run_cli(store: KeyValueStore, stdin: TextIO, stdout: TextIO) -> int:
-    """Interactive CLI for KV store (used by autograder)."""
+    """Run the interactive command-line interface.
+
+    Reads commands (`SET`, `GET`, `EXIT`) from `stdin`
+    and writes responses to `stdout`.
+
+    Returns:
+        Exit code (0 for normal termination).
+    """
     try:
         stdout.reconfigure(encoding="utf-8", line_buffering=True)  # type: ignore
     except Exception:
@@ -146,7 +180,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
-    """Entry point for command-line execution."""
+    """Program entry point: initialize the store and start the CLI."""
     args = build_arg_parser().parse_args()
     store = KeyValueStore(Path(args.db))
     code = run_cli(store, sys.stdin, sys.stdout)
