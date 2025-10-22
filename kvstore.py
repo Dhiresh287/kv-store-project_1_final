@@ -76,6 +76,7 @@ def main():
         else:
             # stay silent on unknown input (rubrics hate extra text)
             continue
+        
 
 if __name__ == "__main__":
     main()
